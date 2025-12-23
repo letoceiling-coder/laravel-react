@@ -102,24 +102,32 @@ class DeployController extends Controller
             $this->info("Используется composer: {$composerPath}");
             
             // На shared-хостинге PHP работает от root, а composer в домашней директории пользователя
-            // Composer - это PHP скрипт, но root может не иметь прав на чтение файла
-            // Используем bash для выполнения команды, так как bash может иметь другие права
+            // Проблема может быть в ACL или других ограничениях доступа
+            // Используем env для установки правильного окружения и sh для выполнения
             
             $phpPath = Process::run('which php8.2')->output() ?: 'php8.2';
             $phpPath = trim($phpPath);
             
-            // Выполняем через bash с явным указанием пути
-            // Используем bash -c для правильной обработки переменных окружения
-            $composerCommand = "cd " . escapeshellarg(base_path()) . " && {$phpPath} {$composerPath} install --no-dev --optimize-autoloader --no-interaction";
-            $bashCommand = "bash -c " . escapeshellarg($composerCommand);
+            // Пробуем выполнить через env с установкой HOME и PATH
+            $homeDir = '/home/d/dsc23ytp';
+            $envVars = [
+                'HOME' => $homeDir,
+                'PATH' => $homeDir . '/bin:' . (getenv('PATH') ?: '/usr/local/bin:/usr/bin:/bin'),
+            ];
             
-            // Проверяем доступность composer через bash
-            $checkCommand = "bash -c " . escapeshellarg("{$phpPath} {$composerPath} --version");
-            $checkComposer = Process::run($checkCommand);
+            // Команда для проверки версии
+            $checkCommand = "env HOME={$homeDir} PATH={$envVars['PATH']} {$phpPath} {$composerPath} --version";
+            
+            // Пробуем через sh
+            $checkComposer = Process::run("sh -c " . escapeshellarg($checkCommand));
             
             if (!$checkComposer->successful()) {
-                // Если bash не помог, пробуем напрямую
-                $checkCommand = "{$phpPath} {$composerPath} --version";
+                // Пробуем через bash
+                $checkComposer = Process::run("bash -c " . escapeshellarg($checkCommand));
+            }
+            
+            if (!$checkComposer->successful()) {
+                // Пробуем напрямую
                 $checkComposer = Process::run($checkCommand);
             }
             
@@ -133,20 +141,34 @@ class DeployController extends Controller
                     'php_path' => $phpPath,
                     'error' => $checkComposer->errorOutput(),
                     'output' => $checkComposer->output(),
+                    'command' => $checkCommand,
                 ]);
             } else {
                 $composerVersion = trim($checkComposer->output());
                 $this->info("Версия composer: {$composerVersion}");
                 
-                // Выполняем composer install через bash
+                // Команда для установки
+                $composerCommand = "cd " . escapeshellarg(base_path()) . " && env HOME={$homeDir} PATH={$envVars['PATH']} {$phpPath} {$composerPath} install --no-dev --optimize-autoloader --no-interaction";
+                
+                // Выполняем через sh
                 $composerInstall = Process::timeout(300)
                     ->path(base_path())
-                    ->run($bashCommand);
+                    ->env($envVars)
+                    ->run("sh -c " . escapeshellarg($composerCommand));
                 
                 if (!$composerInstall->successful()) {
-                    // Если bash не сработал, пробуем напрямую
+                    // Пробуем через bash
                     $composerInstall = Process::timeout(300)
                         ->path(base_path())
+                        ->env($envVars)
+                        ->run("bash -c " . escapeshellarg($composerCommand));
+                }
+                
+                if (!$composerInstall->successful()) {
+                    // Пробуем напрямую
+                    $composerInstall = Process::timeout(300)
+                        ->path(base_path())
+                        ->env($envVars)
                         ->run($composerCommand);
                 }
                 
@@ -163,8 +185,7 @@ class DeployController extends Controller
                         'php_path' => $phpPath,
                         'error' => $errorOutput,
                         'output' => $stdOutput,
-                        'bash_command' => $bashCommand,
-                        'direct_command' => $composerCommand,
+                        'command' => $composerCommand,
                     ]);
                 }
             }
