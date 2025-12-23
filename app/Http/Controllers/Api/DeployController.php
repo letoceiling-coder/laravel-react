@@ -229,13 +229,13 @@ class DeployController extends Controller
      */
     protected function getComposerPath(): string
     {
-        // Проверяем переменную окружения
-        $composerPath = env('COMPOSER_PATH');
+        // 1. Проверяем переменную окружения через config (более надежно чем env())
+        $composerPath = config('app.composer_path') ?: env('COMPOSER_PATH');
         if ($composerPath && file_exists($composerPath)) {
             return $composerPath;
         }
         
-        // Пытаемся найти через which (если в PATH)
+        // 2. Пытаемся найти через which (если в PATH)
         $process = Process::run('which composer');
         if ($process->successful()) {
             $path = trim($process->output());
@@ -244,15 +244,29 @@ class DeployController extends Controller
             }
         }
         
-        // Проверяем пользовательский путь ~/bin/composer (для shared-хостинга)
+        // 3. Проверяем пользовательский путь ~/bin/composer (для shared-хостинга)
         $homeDir = getenv('HOME') ?: (getenv('USERPROFILE') ?: '~');
-        $userComposerPath = $homeDir . '/bin/composer';
         
-        if (file_exists($userComposerPath)) {
-            return $userComposerPath;
+        // Проверяем несколько вариантов путей
+        $possiblePaths = [
+            $homeDir . '/bin/composer',
+            '/home/d/dsc23ytp/bin/composer', // Прямой путь для этого сервера
+        ];
+        
+        // Также проверяем через реальный путь HOME (может отличаться от getenv)
+        if ($homeDir !== '~') {
+            $possiblePaths[] = $homeDir . '/bin/composer';
         }
         
-        // Стандартный путь (последний вариант)
+        foreach ($possiblePaths as $userComposerPath) {
+            // Нормализуем путь (убираем ~ если есть)
+            $normalizedPath = str_replace('~', $homeDir, $userComposerPath);
+            if (file_exists($normalizedPath)) {
+                return $normalizedPath;
+            }
+        }
+        
+        // 4. Стандартный путь (последний вариант)
         return 'composer';
     }
     
