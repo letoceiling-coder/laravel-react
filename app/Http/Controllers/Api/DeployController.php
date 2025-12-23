@@ -102,48 +102,92 @@ class DeployController extends Controller
             $this->info("Используется composer: {$composerPath}");
             
             // На shared-хостинге PHP работает от root, а composer в домашней директории пользователя
-            // Используем su для переключения на пользователя dsc23ytp
+            // Пробуем несколько вариантов выполнения
+            
+            // Вариант 1: Прямое выполнение (может не работать из-за прав)
+            $directCommand = "cd " . escapeshellarg(base_path()) . " && {$composerPath} install --no-dev --optimize-autoloader --no-interaction";
+            
+            // Вариант 2: Через su (если доступен)
             $user = 'dsc23ytp';
-            $composerCommand = "cd " . escapeshellarg(base_path()) . " && {$composerPath} install --no-dev --optimize-autoloader --no-interaction";
-            $fullCommand = "su - {$user} -c " . escapeshellarg($composerCommand);
+            $suCommand = "su - {$user} -c " . escapeshellarg($directCommand);
             
-            // Проверяем доступность composer перед использованием
-            $checkCommand = "su - {$user} -c " . escapeshellarg("{$composerPath} --version");
-            $checkComposer = Process::run($checkCommand);
+            // Сначала пробуем прямое выполнение
+            $checkComposer = Process::run("{$composerPath} --version");
             
-            if (!$checkComposer->successful()) {
-                $errorMsg = "Composer недоступен по пути: {$composerPath}";
-                $responseData['composer_install'] = 'error: ' . $errorMsg;
-                $this->error($errorMsg);
-                $this->warn('Проверьте путь к composer в переменной COMPOSER_PATH в .env');
-                Log::error('[Deploy] Composer недоступен', [
-                    'path' => $composerPath,
-                    'error' => $checkComposer->errorOutput(),
-                    'output' => $checkComposer->output(),
-                ]);
-            } else {
+            if ($checkComposer->successful()) {
+                // Прямое выполнение работает
                 $composerVersion = trim($checkComposer->output());
                 $this->info("Версия composer: {$composerVersion}");
                 
-                // Выполняем composer install от имени пользователя dsc23ytp
                 $composerInstall = Process::timeout(300)
                     ->path(base_path())
-                    ->run($fullCommand);
+                    ->run($directCommand);
                 
                 if ($composerInstall->successful()) {
                     $responseData['composer_install'] = 'success';
                     $this->info('Composer install выполнен успешно');
                 } else {
-                    $errorOutput = $composerInstall->errorOutput();
-                    $stdOutput = $composerInstall->output();
-                    $responseData['composer_install'] = 'error: ' . ($errorOutput ?: $stdOutput);
-                    $this->error('Ошибка composer install: ' . ($errorOutput ?: $stdOutput));
-                    Log::error('[Deploy] Ошибка composer install', [
+                    // Если прямое выполнение не сработало, пробуем через su
+                    $this->warn('Прямое выполнение не сработало, пробуем через su...');
+                    $composerInstall = Process::timeout(300)
+                        ->path(base_path())
+                        ->run($suCommand);
+                    
+                    if ($composerInstall->successful()) {
+                        $responseData['composer_install'] = 'success';
+                        $this->info('Composer install выполнен успешно (через su)');
+                    } else {
+                        $errorOutput = $composerInstall->errorOutput();
+                        $stdOutput = $composerInstall->output();
+                        $responseData['composer_install'] = 'error: ' . ($errorOutput ?: $stdOutput);
+                        $this->error('Ошибка composer install: ' . ($errorOutput ?: $stdOutput));
+                        Log::error('[Deploy] Ошибка composer install', [
+                            'path' => $composerPath,
+                            'error' => $errorOutput,
+                            'output' => $stdOutput,
+                        ]);
+                    }
+                }
+            } else {
+                // Прямое выполнение не работает, пробуем через su
+                $this->info('Прямое выполнение не работает, используем su...');
+                $checkCommand = "su - {$user} -c " . escapeshellarg("{$composerPath} --version");
+                $checkComposer = Process::run($checkCommand);
+                
+                if (!$checkComposer->successful()) {
+                    $errorMsg = "Composer недоступен по пути: {$composerPath}";
+                    $responseData['composer_install'] = 'error: ' . $errorMsg;
+                    $this->error($errorMsg);
+                    $this->warn('Проверьте путь к composer в переменной COMPOSER_PATH в .env');
+                    Log::error('[Deploy] Composer недоступен', [
                         'path' => $composerPath,
-                        'error' => $errorOutput,
-                        'output' => $stdOutput,
-                        'command' => $fullCommand,
+                        'error' => $checkComposer->errorOutput(),
+                        'output' => $checkComposer->output(),
                     ]);
+                } else {
+                    $composerVersion = trim($checkComposer->output());
+                    $this->info("Версия composer: {$composerVersion}");
+                    
+                    // Выполняем composer install через su
+                    $composerInstall = Process::timeout(300)
+                        ->path(base_path())
+                        ->run($suCommand);
+                    
+                    if ($composerInstall->successful()) {
+                        $responseData['composer_install'] = 'success';
+                        $this->info('Composer install выполнен успешно (через su)');
+                    } else {
+                        $errorOutput = $composerInstall->errorOutput();
+                        $stdOutput = $composerInstall->output();
+                        $responseData['composer_install'] = 'error: ' . ($errorOutput ?: $stdOutput);
+                        $this->error('Ошибка composer install: ' . ($errorOutput ?: $stdOutput));
+                        Log::error('[Deploy] Ошибка composer install', [
+                            'path' => $composerPath,
+                            'error' => $errorOutput,
+                            'output' => $stdOutput,
+                            'command' => $suCommand,
+                        ]);
+                    }
                 }
             }
             
