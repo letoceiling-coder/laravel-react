@@ -64,6 +64,14 @@ class DeployController extends Controller
             $branch = $request->input('branch', 'main');
             $runSeeders = $request->input('run_seeders', false);
             
+            // Проверяем и генерируем APP_KEY если отсутствует
+            $appKey = env('APP_KEY');
+            if (empty($appKey)) {
+                $this->warn('APP_KEY отсутствует, генерируем...');
+                Artisan::call('key:generate', ['--force' => true]);
+                $this->info('APP_KEY сгенерирован');
+            }
+            
             $responseData = [
                 'php_path' => Process::run('which php8.2')->output() ?: 'php',
                 'php_version' => PHP_VERSION,
