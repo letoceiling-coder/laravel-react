@@ -279,22 +279,19 @@ class DeployController extends Controller
             return $composerPath;
         }
         
-        // 3. Пытаемся найти через which (если в PATH)
-        $process = Process::run('which composer');
-        if ($process->successful()) {
-            $path = trim($process->output());
-            if ($path && file_exists($path) && is_executable($path)) {
-                return $path;
-            }
+        // 3. Проверяем прямой путь для этого сервера (приоритет)
+        // Это самый надежный способ для shared-хостинга
+        $directPath = '/home/d/dsc23ytp/bin/composer';
+        if (file_exists($directPath) && is_executable($directPath)) {
+            Log::info('[Deploy] Composer найден по прямому пути: ' . $directPath);
+            return $directPath;
         }
         
         // 4. Проверяем пользовательский путь ~/bin/composer (для shared-хостинга)
-        $homeDir = getenv('HOME') ?: (getenv('USERPROFILE') ?: '~');
+        $homeDir = getenv('HOME') ?: (getenv('USERPROFILE') ?: '/home/d/dsc23ytp');
         
-        // Проверяем несколько вариантов путей (прямой путь имеет приоритет)
-        $possiblePaths = [
-            '/home/d/dsc23ytp/bin/composer', // Прямой путь для этого сервера (приоритет)
-        ];
+        // Проверяем несколько вариантов путей
+        $possiblePaths = [];
         
         // Добавляем путь на основе HOME
         if ($homeDir && $homeDir !== '~') {
@@ -304,12 +301,29 @@ class DeployController extends Controller
         foreach ($possiblePaths as $userComposerPath) {
             // Нормализуем путь (убираем ~ если есть)
             $normalizedPath = str_replace('~', $homeDir, $userComposerPath);
+            
             if (file_exists($normalizedPath) && is_executable($normalizedPath)) {
+                Log::info('[Deploy] Composer найден по пути: ' . $normalizedPath);
                 return $normalizedPath;
             }
         }
         
+        // 5. Пытаемся найти через which (если в PATH)
+        // Используем полный PATH с ~/bin для shared-хостинга
+        $currentPath = getenv('PATH') ?: '';
+        $fullPath = $homeDir . '/bin:' . $currentPath;
+        
+        $process = Process::run('which composer');
+        if ($process->successful()) {
+            $path = trim($process->output());
+            if ($path && file_exists($path) && is_executable($path)) {
+                Log::info('[Deploy] Composer найден через which: ' . $path);
+                return $path;
+            }
+        }
+        
         // 5. Стандартный путь (последний вариант)
+        Log::warning('[Deploy] Composer не найден, используется стандартный путь: composer');
         return 'composer';
     }
     
