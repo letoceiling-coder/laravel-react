@@ -267,28 +267,49 @@ class DeployController extends Controller
             $envContent = file_get_contents($envPath);
             if (preg_match('/^COMPOSER_PATH=(.+)$/m', $envContent, $matches)) {
                 $composerPath = trim($matches[1]);
-                if ($composerPath && file_exists($composerPath) && is_executable($composerPath)) {
-                    return $composerPath;
+                if ($composerPath) {
+                    Log::debug('[Deploy] Проверка COMPOSER_PATH из .env: ' . $composerPath, [
+                        'exists' => file_exists($composerPath),
+                        'readable' => file_exists($composerPath) ? is_readable($composerPath) : false,
+                        'executable' => file_exists($composerPath) ? is_executable($composerPath) : false,
+                    ]);
+                    if (file_exists($composerPath) && is_readable($composerPath)) {
+                        return $composerPath;
+                    }
                 }
             }
         }
         
         // 2. Проверяем переменную окружения через config и env
         $composerPath = config('app.composer_path') ?: env('COMPOSER_PATH');
-        if ($composerPath && file_exists($composerPath) && is_executable($composerPath)) {
-            return $composerPath;
+        if ($composerPath) {
+            Log::debug('[Deploy] Проверка COMPOSER_PATH из config/env: ' . $composerPath, [
+                'exists' => file_exists($composerPath),
+                'readable' => file_exists($composerPath) ? is_readable($composerPath) : false,
+            ]);
+            if (file_exists($composerPath) && is_readable($composerPath)) {
+                return $composerPath;
+            }
         }
         
         // 3. Проверяем прямой путь для этого сервера (приоритет)
         // Это самый надежный способ для shared-хостинга
         $directPath = '/home/d/dsc23ytp/bin/composer';
-        if (file_exists($directPath) && is_executable($directPath)) {
+        Log::debug('[Deploy] Проверка прямого пути: ' . $directPath, [
+            'exists' => file_exists($directPath),
+            'readable' => file_exists($directPath) ? is_readable($directPath) : false,
+            'executable' => file_exists($directPath) ? is_executable($directPath) : false,
+            'perms' => file_exists($directPath) ? substr(sprintf('%o', fileperms($directPath)), -4) : 'N/A',
+        ]);
+        
+        if (file_exists($directPath) && is_readable($directPath)) {
             Log::info('[Deploy] Composer найден по прямому пути: ' . $directPath);
             return $directPath;
         }
         
         // 4. Проверяем пользовательский путь ~/bin/composer (для shared-хостинга)
         $homeDir = getenv('HOME') ?: (getenv('USERPROFILE') ?: '/home/d/dsc23ytp');
+        Log::debug('[Deploy] HOME директория: ' . $homeDir);
         
         // Проверяем несколько вариантов путей
         $possiblePaths = [];
@@ -301,8 +322,12 @@ class DeployController extends Controller
         foreach ($possiblePaths as $userComposerPath) {
             // Нормализуем путь (убираем ~ если есть)
             $normalizedPath = str_replace('~', $homeDir, $userComposerPath);
+            Log::debug('[Deploy] Проверка пути: ' . $normalizedPath, [
+                'exists' => file_exists($normalizedPath),
+                'readable' => file_exists($normalizedPath) ? is_readable($normalizedPath) : false,
+            ]);
             
-            if (file_exists($normalizedPath) && is_executable($normalizedPath)) {
+            if (file_exists($normalizedPath) && is_readable($normalizedPath)) {
                 Log::info('[Deploy] Composer найден по пути: ' . $normalizedPath);
                 return $normalizedPath;
             }
@@ -316,13 +341,13 @@ class DeployController extends Controller
         $process = Process::run('which composer');
         if ($process->successful()) {
             $path = trim($process->output());
-            if ($path && file_exists($path) && is_executable($path)) {
+            if ($path && file_exists($path) && is_readable($path)) {
                 Log::info('[Deploy] Composer найден через which: ' . $path);
                 return $path;
             }
         }
         
-        // 5. Стандартный путь (последний вариант)
+        // 6. Стандартный путь (последний вариант)
         Log::warning('[Deploy] Composer не найден, используется стандартный путь: composer');
         return 'composer';
     }
