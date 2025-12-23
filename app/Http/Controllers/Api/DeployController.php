@@ -102,18 +102,26 @@ class DeployController extends Controller
             $this->info("Используется composer: {$composerPath}");
             
             // На shared-хостинге PHP работает от root, а composer в домашней директории пользователя
-            // Composer - это PHP скрипт, поэтому выполняем его через php8.2 напрямую
-            // Это работает даже если файл принадлежит другому пользователю
+            // Composer - это PHP скрипт, но root может не иметь прав на чтение файла
+            // Используем bash для выполнения команды, так как bash может иметь другие права
             
             $phpPath = Process::run('which php8.2')->output() ?: 'php8.2';
             $phpPath = trim($phpPath);
             
-            // Выполняем composer через php8.2
+            // Выполняем через bash с явным указанием пути
+            // Используем bash -c для правильной обработки переменных окружения
             $composerCommand = "cd " . escapeshellarg(base_path()) . " && {$phpPath} {$composerPath} install --no-dev --optimize-autoloader --no-interaction";
+            $bashCommand = "bash -c " . escapeshellarg($composerCommand);
             
-            // Проверяем доступность composer
-            $checkCommand = "{$phpPath} {$composerPath} --version";
+            // Проверяем доступность composer через bash
+            $checkCommand = "bash -c " . escapeshellarg("{$phpPath} {$composerPath} --version");
             $checkComposer = Process::run($checkCommand);
+            
+            if (!$checkComposer->successful()) {
+                // Если bash не помог, пробуем напрямую
+                $checkCommand = "{$phpPath} {$composerPath} --version";
+                $checkComposer = Process::run($checkCommand);
+            }
             
             if (!$checkComposer->successful()) {
                 $errorMsg = "Composer недоступен по пути: {$composerPath}";
@@ -130,10 +138,17 @@ class DeployController extends Controller
                 $composerVersion = trim($checkComposer->output());
                 $this->info("Версия composer: {$composerVersion}");
                 
-                // Выполняем composer install через php8.2
+                // Выполняем composer install через bash
                 $composerInstall = Process::timeout(300)
                     ->path(base_path())
-                    ->run($composerCommand);
+                    ->run($bashCommand);
+                
+                if (!$composerInstall->successful()) {
+                    // Если bash не сработал, пробуем напрямую
+                    $composerInstall = Process::timeout(300)
+                        ->path(base_path())
+                        ->run($composerCommand);
+                }
                 
                 if ($composerInstall->successful()) {
                     $responseData['composer_install'] = 'success';
@@ -148,7 +163,8 @@ class DeployController extends Controller
                         'php_path' => $phpPath,
                         'error' => $errorOutput,
                         'output' => $stdOutput,
-                        'command' => $composerCommand,
+                        'bash_command' => $bashCommand,
+                        'direct_command' => $composerCommand,
                     ]);
                 }
             }
