@@ -101,14 +101,26 @@ class DeployController extends Controller
             // Выводим информацию о используемом composer
             $this->info("Используется composer: {$composerPath}");
             
-            // Проверяем доступность composer перед использованием
-            $checkComposer = Process::run("{$composerPath} --version");
-            if (!$checkComposer->successful()) {
-                $errorMsg = "Composer недоступен по пути: {$composerPath}";
+            // Проверяем существование файла если это полный путь
+            if ($composerPath !== 'composer' && !file_exists($composerPath)) {
+                $errorMsg = "Composer не найден по пути: {$composerPath}";
                 $responseData['composer_install'] = 'error: ' . $errorMsg;
                 $this->error($errorMsg);
                 $this->warn('Проверьте путь к composer в переменной COMPOSER_PATH в .env');
+                Log::error('[Deploy] Composer не найден', ['path' => $composerPath]);
             } else {
+                // Проверяем доступность composer перед использованием
+                $checkComposer = Process::run("{$composerPath} --version");
+                if (!$checkComposer->successful()) {
+                    $errorMsg = "Composer недоступен по пути: {$composerPath}";
+                    $responseData['composer_install'] = 'error: ' . $errorMsg;
+                    $this->error($errorMsg);
+                    $this->warn('Проверьте путь к composer в переменной COMPOSER_PATH в .env');
+                    Log::error('[Deploy] Composer недоступен', [
+                        'path' => $composerPath,
+                        'error' => $checkComposer->errorOutput(),
+                    ]);
+                } else {
                 $composerVersion = trim($checkComposer->output());
                 $this->info("Версия composer: {$composerVersion}");
                 
@@ -119,13 +131,18 @@ class DeployController extends Controller
                     ])
                     ->run("{$composerPath} install --no-dev --optimize-autoloader --no-interaction");
                 
-                if ($composerInstall->successful()) {
-                    $responseData['composer_install'] = 'success';
-                    $this->info('Composer install выполнен успешно');
-                } else {
-                    $errorOutput = $composerInstall->errorOutput();
-                    $responseData['composer_install'] = 'error: ' . $errorOutput;
-                    $this->error('Ошибка composer install: ' . $errorOutput);
+                    if ($composerInstall->successful()) {
+                        $responseData['composer_install'] = 'success';
+                        $this->info('Composer install выполнен успешно');
+                    } else {
+                        $errorOutput = $composerInstall->errorOutput();
+                        $responseData['composer_install'] = 'error: ' . $errorOutput;
+                        $this->error('Ошибка composer install: ' . $errorOutput);
+                        Log::error('[Deploy] Ошибка composer install', [
+                            'path' => $composerPath,
+                            'error' => $errorOutput,
+                        ]);
+                    }
                 }
             }
             
@@ -237,44 +254,55 @@ class DeployController extends Controller
      */
     protected function getComposerPath(): string
     {
-        // 1. Проверяем переменную окружения через config (более надежно чем env())
+        // 1. Читаем напрямую из .env (надежнее чем env() в рантайме)
+        $envPath = base_path('.env');
+        if (file_exists($envPath)) {
+            $envContent = file_get_contents($envPath);
+            if (preg_match('/^COMPOSER_PATH=(.+)$/m', $envContent, $matches)) {
+                $composerPath = trim($matches[1]);
+                if ($composerPath && file_exists($composerPath) && is_executable($composerPath)) {
+                    return $composerPath;
+                }
+            }
+        }
+        
+        // 2. Проверяем переменную окружения через config и env
         $composerPath = config('app.composer_path') ?: env('COMPOSER_PATH');
-        if ($composerPath && file_exists($composerPath)) {
+        if ($composerPath && file_exists($composerPath) && is_executable($composerPath)) {
             return $composerPath;
         }
         
-        // 2. Пытаемся найти через which (если в PATH)
+        // 3. Пытаемся найти через which (если в PATH)
         $process = Process::run('which composer');
         if ($process->successful()) {
             $path = trim($process->output());
-            if ($path && file_exists($path)) {
+            if ($path && file_exists($path) && is_executable($path)) {
                 return $path;
             }
         }
         
-        // 3. Проверяем пользовательский путь ~/bin/composer (для shared-хостинга)
+        // 4. Проверяем пользовательский путь ~/bin/composer (для shared-хостинга)
         $homeDir = getenv('HOME') ?: (getenv('USERPROFILE') ?: '~');
         
-        // Проверяем несколько вариантов путей
+        // Проверяем несколько вариантов путей (прямой путь имеет приоритет)
         $possiblePaths = [
-            $homeDir . '/bin/composer',
-            '/home/d/dsc23ytp/bin/composer', // Прямой путь для этого сервера
+            '/home/d/dsc23ytp/bin/composer', // Прямой путь для этого сервера (приоритет)
         ];
         
-        // Также проверяем через реальный путь HOME (может отличаться от getenv)
-        if ($homeDir !== '~') {
+        // Добавляем путь на основе HOME
+        if ($homeDir && $homeDir !== '~') {
             $possiblePaths[] = $homeDir . '/bin/composer';
         }
         
         foreach ($possiblePaths as $userComposerPath) {
             // Нормализуем путь (убираем ~ если есть)
             $normalizedPath = str_replace('~', $homeDir, $userComposerPath);
-            if (file_exists($normalizedPath)) {
+            if (file_exists($normalizedPath) && is_executable($normalizedPath)) {
                 return $normalizedPath;
             }
         }
         
-        // 4. Стандартный путь (последний вариант)
+        // 5. Стандартный путь (последний вариант)
         return 'composer';
     }
     
