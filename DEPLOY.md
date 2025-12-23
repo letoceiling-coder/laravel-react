@@ -108,8 +108,11 @@ php artisan deploy --message="Новая версия" --insecure
 
 - Git должен быть установлен и настроен
 - Node.js и npm должны быть установлены (для сборки фронтенда)
-- React приложение должно быть в папке `frontend/`
+- React приложение должно быть в папке `frontend/` (опционально)
 - На сервере должен быть настроен endpoint `/api/deploy` для приема запросов
+  - Контроллер: `app/Http/Controllers/Api/DeployController.php`
+  - Роут: `routes/api.php` → `POST /api/deploy`
+  - **Инструкция:** `SERVER_DEPLOY_ENDPOINT.md`
 
 ## Настройка для Shared-хостинга (Beget)
 

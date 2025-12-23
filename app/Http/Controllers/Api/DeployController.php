@@ -1,0 +1,257 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Log;
+
+/**
+ * Контроллер для обработки запросов деплоя с сервера
+ * 
+ * Принимает POST запросы от команды deploy для автоматического обновления кода на сервере.
+ * 
+ * @package App\Http\Controllers\Api
+ */
+class DeployController extends Controller
+{
+    /**
+     * Обработка запроса на деплой
+     * 
+     * Выполняет:
+     * 1. Проверку токена авторизации
+     * 2. Git pull из репозитория
+     * 3. Composer install
+     * 4. Миграции (если нужно)
+     * 5. Seeders (если указано)
+     * 6. Очистку кеша
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function handle(Request $request)
+    {
+        $startTime = microtime(true);
+        
+        try {
+            // Проверка токена
+            $token = $request->header('X-Deploy-Token');
+            $expectedToken = env('DEPLOY_TOKEN');
+            
+            if (!$expectedToken) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'DEPLOY_TOKEN не настроен на сервере',
+                ], 500);
+            }
+            
+            if ($token !== $expectedToken) {
+                Log::warning('Неверный токен деплоя', [
+                    'ip' => $request->ip(),
+                    'provided_token' => substr($token ?? '', 0, 3) . '...' . substr($token ?? '', -3),
+                ]);
+                
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Неверный токен авторизации',
+                ], 401);
+            }
+            
+            // Получаем данные из запроса
+            $commitHash = $request->input('commit_hash', 'unknown');
+            $branch = $request->input('branch', 'main');
+            $runSeeders = $request->input('run_seeders', false);
+            
+            $responseData = [
+                'php_path' => Process::run('which php8.2')->output() ?: 'php',
+                'php_version' => PHP_VERSION,
+                'git_pull' => null,
+                'composer_install' => null,
+                'migrations' => null,
+                'seeders' => null,
+                'cache_clear' => null,
+            ];
+            
+            // 1. Git pull
+            $this->info('Выполнение git pull...');
+            $gitPull = Process::timeout(60)->run('git pull origin ' . escapeshellarg($branch));
+            
+            if ($gitPull->successful()) {
+                $responseData['git_pull'] = 'success';
+                $this->info('Git pull выполнен успешно');
+            } else {
+                $responseData['git_pull'] = 'error: ' . $gitPull->errorOutput();
+                $this->error('Ошибка git pull: ' . $gitPull->errorOutput());
+            }
+            
+            // 2. Composer install
+            $this->info('Выполнение composer install...');
+            $composerPath = $this->getComposerPath();
+            $composerInstall = Process::timeout(300)
+                ->path(base_path())
+                ->run("{$composerPath} install --no-dev --optimize-autoloader --no-interaction");
+            
+            if ($composerInstall->successful()) {
+                $responseData['composer_install'] = 'success';
+                $this->info('Composer install выполнен успешно');
+            } else {
+                $responseData['composer_install'] = 'error: ' . $composerInstall->errorOutput();
+                $this->error('Ошибка composer install: ' . $composerInstall->errorOutput());
+            }
+            
+            // 3. Миграции
+            $this->info('Выполнение миграций...');
+            $migrate = Artisan::call('migrate', ['--force' => true]);
+            
+            if ($migrate === 0) {
+                $responseData['migrations'] = [
+                    'status' => 'success',
+                    'message' => 'Миграции выполнены успешно',
+                ];
+                $this->info('Миграции выполнены успешно');
+            } else {
+                $output = Artisan::output();
+                $responseData['migrations'] = [
+                    'status' => 'error',
+                    'error' => $output ?: 'Неизвестная ошибка',
+                ];
+                $this->error('Ошибка миграций: ' . $output);
+            }
+            
+            // 4. Seeders (если указано)
+            if ($runSeeders) {
+                $this->info('Выполнение seeders...');
+                $seed = Artisan::call('db:seed', ['--force' => true]);
+                
+                if ($seed === 0) {
+                    $responseData['seeders'] = [
+                        'status' => 'success',
+                        'message' => 'Seeders выполнены успешно',
+                    ];
+                    $this->info('Seeders выполнены успешно');
+                } else {
+                    $output = Artisan::output();
+                    $responseData['seeders'] = [
+                        'status' => 'error',
+                        'error' => $output ?: 'Неизвестная ошибка',
+                    ];
+                    $this->warn('Ошибка seeders: ' . $output);
+                }
+            } else {
+                $responseData['seeders'] = [
+                    'status' => 'skipped',
+                    'message' => 'Seeders пропущены (не указан флаг run_seeders)',
+                ];
+            }
+            
+            // 5. Очистка кеша
+            $this->info('Очистка кеша...');
+            Artisan::call('config:clear');
+            Artisan::call('cache:clear');
+            Artisan::call('route:clear');
+            Artisan::call('view:clear');
+            $responseData['cache_clear'] = 'success';
+            $this->info('Кеш очищен');
+            
+            // Время выполнения
+            $duration = round(microtime(true) - $startTime, 2);
+            $responseData['duration_seconds'] = $duration;
+            $responseData['deployed_at'] = now()->toDateTimeString();
+            
+            Log::info('Деплой выполнен успешно', [
+                'commit_hash' => $commitHash,
+                'branch' => $branch,
+                'duration' => $duration,
+            ]);
+            
+            return response()->json([
+                'success' => true,
+                'message' => 'Деплой выполнен успешно',
+                'data' => $responseData,
+            ], 200);
+            
+        } catch (\Exception $e) {
+            Log::error('Ошибка деплоя', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Ошибка выполнения деплоя: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+    
+    /**
+     * Получить путь к composer
+     * 
+     * Определяет путь к composer аналогично команде Deploy
+     *
+     * @return string
+     */
+    protected function getComposerPath(): string
+    {
+        // Проверяем переменную окружения
+        $composerPath = env('COMPOSER_PATH');
+        if ($composerPath && file_exists($composerPath)) {
+            return $composerPath;
+        }
+        
+        // Пытаемся найти через which
+        $process = Process::run('which composer');
+        if ($process->successful()) {
+            $path = trim($process->output());
+            if ($path && file_exists($path)) {
+                return $path;
+            }
+        }
+        
+        // Проверяем пользовательский путь
+        $homeDir = getenv('HOME') ?: (getenv('USERPROFILE') ?: '~');
+        $userComposerPath = $homeDir . '/bin/composer';
+        
+        if (file_exists($userComposerPath)) {
+            return $userComposerPath;
+        }
+        
+        // Стандартный путь
+        return 'composer';
+    }
+    
+    /**
+     * Вывод информационного сообщения
+     *
+     * @param string $message
+     * @return void
+     */
+    protected function info(string $message): void
+    {
+        Log::info('[Deploy] ' . $message);
+    }
+    
+    /**
+     * Вывод предупреждения
+     *
+     * @param string $message
+     * @return void
+     */
+    protected function warn(string $message): void
+    {
+        Log::warning('[Deploy] ' . $message);
+    }
+    
+    /**
+     * Вывод ошибки
+     *
+     * @param string $message
+     * @return void
+     */
+    protected function error(string $message): void
+    {
+        Log::error('[Deploy] ' . $message);
+    }
+}
+

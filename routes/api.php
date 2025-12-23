@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\DeployController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -13,10 +14,15 @@ use Illuminate\Support\Facades\Route;
 |
 */
 
+// Health check endpoint
 Route::get('/health', function () {
     return response()->json([
         'status' => 'ok',
         'timestamp' => now()->toIso8601String(),
     ]);
 });
+
+// Deploy endpoint - автоматическое обновление кода на сервере
+// Требует заголовок X-Deploy-Token для авторизации
+Route::post('/deploy', [DeployController::class, 'handle'])->name('api.deploy');
 
