@@ -294,18 +294,26 @@ class DeployController extends Controller
         
         // 3. Проверяем прямой путь для этого сервера (приоритет)
         // Это самый надежный способ для shared-хостинга
+        // Используем shell для проверки, так как PHP может работать от другого пользователя
         $directPath = '/home/d/dsc23ytp/bin/composer';
-        Log::debug('[Deploy] Проверка прямого пути: ' . $directPath, [
-            'exists' => file_exists($directPath),
-            'readable' => file_exists($directPath) ? is_readable($directPath) : false,
-            'executable' => file_exists($directPath) ? is_executable($directPath) : false,
-            'perms' => file_exists($directPath) ? substr(sprintf('%o', fileperms($directPath)), -4) : 'N/A',
-        ]);
         
-        if (file_exists($directPath) && is_readable($directPath)) {
+        // Проверяем через shell, так как file_exists() может не работать из-за разных пользователей
+        $testProcess = Process::run("test -f {$directPath} && test -x {$directPath} && echo 'exists'");
+        if ($testProcess->successful() && trim($testProcess->output()) === 'exists') {
+            Log::info('[Deploy] Composer найден по прямому пути (через shell): ' . $directPath);
+            return $directPath;
+        }
+        
+        // Fallback: проверяем через file_exists (может не работать на shared-хостинге)
+        if (file_exists($directPath)) {
             Log::info('[Deploy] Composer найден по прямому пути: ' . $directPath);
             return $directPath;
         }
+        
+        Log::debug('[Deploy] Прямой путь не найден: ' . $directPath, [
+            'shell_check' => $testProcess->successful() ? 'failed' : 'error',
+            'php_check' => file_exists($directPath),
+        ]);
         
         // 4. Проверяем пользовательский путь ~/bin/composer (для shared-хостинга)
         $homeDir = getenv('HOME') ?: (getenv('USERPROFILE') ?: '/home/d/dsc23ytp');
