@@ -152,7 +152,6 @@ class DeployController extends Controller
                     }
                 }
             }
-            }
             
             // 3. Миграции
             $this->info('Выполнение миграций...');
