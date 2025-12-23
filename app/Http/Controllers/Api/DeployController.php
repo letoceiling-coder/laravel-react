@@ -322,8 +322,14 @@ class DeployController extends Controller
         }
         
         // 3. Используем прямой путь для этого сервера (приоритет)
-        // На shared-хостинге PHP работает от другого пользователя (root),
-        // поэтому file_exists() может не работать, но путь все равно правильный
+        // Пробуем сначала скопированный composer в проекте (доступен root)
+        $projectComposerPath = '/home/d/dsc23ytp/laravel/bin/composer';
+        if (file_exists($projectComposerPath) || is_readable($projectComposerPath)) {
+            Log::info('[Deploy] Используется composer из проекта: ' . $projectComposerPath);
+            return $projectComposerPath;
+        }
+        
+        // Fallback: оригинальный путь
         $directPath = '/home/d/dsc23ytp/bin/composer';
         Log::info('[Deploy] Используется прямой путь для сервера: ' . $directPath);
         return $directPath;
