@@ -89,16 +89,36 @@ class DeployController extends Controller
             // 2. Composer install
             $this->info('Выполнение composer install...');
             $composerPath = $this->getComposerPath();
-            $composerInstall = Process::timeout(300)
-                ->path(base_path())
-                ->run("{$composerPath} install --no-dev --optimize-autoloader --no-interaction");
             
-            if ($composerInstall->successful()) {
-                $responseData['composer_install'] = 'success';
-                $this->info('Composer install выполнен успешно');
+            // Выводим информацию о используемом composer
+            $this->info("Используется composer: {$composerPath}");
+            
+            // Проверяем доступность composer перед использованием
+            $checkComposer = Process::run("{$composerPath} --version");
+            if (!$checkComposer->successful()) {
+                $errorMsg = "Composer недоступен по пути: {$composerPath}";
+                $responseData['composer_install'] = 'error: ' . $errorMsg;
+                $this->error($errorMsg);
+                $this->warn('Проверьте путь к composer в переменной COMPOSER_PATH в .env');
             } else {
-                $responseData['composer_install'] = 'error: ' . $composerInstall->errorOutput();
-                $this->error('Ошибка composer install: ' . $composerInstall->errorOutput());
+                $composerVersion = trim($checkComposer->output());
+                $this->info("Версия composer: {$composerVersion}");
+                
+                $composerInstall = Process::timeout(300)
+                    ->path(base_path())
+                    ->env([
+                        'PATH' => getenv('PATH') . ':' . dirname($composerPath),
+                    ])
+                    ->run("{$composerPath} install --no-dev --optimize-autoloader --no-interaction");
+                
+                if ($composerInstall->successful()) {
+                    $responseData['composer_install'] = 'success';
+                    $this->info('Composer install выполнен успешно');
+                } else {
+                    $errorOutput = $composerInstall->errorOutput();
+                    $responseData['composer_install'] = 'error: ' . $errorOutput;
+                    $this->error('Ошибка composer install: ' . $errorOutput);
+                }
             }
             
             // 3. Миграции
@@ -148,12 +168,26 @@ class DeployController extends Controller
             
             // 5. Очистка кеша
             $this->info('Очистка кеша...');
-            Artisan::call('config:clear');
-            Artisan::call('cache:clear');
-            Artisan::call('route:clear');
-            Artisan::call('view:clear');
-            $responseData['cache_clear'] = 'success';
-            $this->info('Кеш очищен');
+            try {
+                Artisan::call('config:clear');
+                Artisan::call('route:clear');
+                Artisan::call('view:clear');
+                
+                // Очистка cache может вызвать ошибку если таблица не существует
+                // Выполняем с обработкой ошибок
+                try {
+                    Artisan::call('cache:clear');
+                } catch (\Exception $e) {
+                    // Если таблица cache не существует, это не критично
+                    $this->warn('Ошибка очистки cache (возможно таблица не существует): ' . $e->getMessage());
+                }
+                
+                $responseData['cache_clear'] = 'success';
+                $this->info('Кеш очищен');
+            } catch (\Exception $e) {
+                $responseData['cache_clear'] = 'partial: ' . $e->getMessage();
+                $this->warn('Частичная ошибка очистки кеша: ' . $e->getMessage());
+            }
             
             // Время выполнения
             $duration = round(microtime(true) - $startTime, 2);
@@ -189,6 +223,7 @@ class DeployController extends Controller
      * Получить путь к composer
      * 
      * Определяет путь к composer аналогично команде Deploy
+     * Использует те же методы определения пути
      *
      * @return string
      */
@@ -200,7 +235,7 @@ class DeployController extends Controller
             return $composerPath;
         }
         
-        // Пытаемся найти через which
+        // Пытаемся найти через which (если в PATH)
         $process = Process::run('which composer');
         if ($process->successful()) {
             $path = trim($process->output());
@@ -209,7 +244,7 @@ class DeployController extends Controller
             }
         }
         
-        // Проверяем пользовательский путь
+        // Проверяем пользовательский путь ~/bin/composer (для shared-хостинга)
         $homeDir = getenv('HOME') ?: (getenv('USERPROFILE') ?: '~');
         $userComposerPath = $homeDir . '/bin/composer';
         
@@ -217,7 +252,7 @@ class DeployController extends Controller
             return $userComposerPath;
         }
         
-        // Стандартный путь
+        // Стандартный путь (последний вариант)
         return 'composer';
     }
     
