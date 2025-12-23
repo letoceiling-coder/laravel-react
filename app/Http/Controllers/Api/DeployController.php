@@ -121,16 +121,23 @@ class DeployController extends Controller
                         'error' => $checkComposer->errorOutput(),
                     ]);
                 } else {
-                $composerVersion = trim($checkComposer->output());
-                $this->info("Версия composer: {$composerVersion}");
-                
-                $composerInstall = Process::timeout(300)
-                    ->path(base_path())
-                    ->env([
-                        'PATH' => getenv('PATH') . ':' . dirname($composerPath),
-                    ])
-                    ->run("{$composerPath} install --no-dev --optimize-autoloader --no-interaction");
-                
+                    $composerVersion = trim($checkComposer->output());
+                    $this->info("Версия composer: {$composerVersion}");
+                    
+                    // Подготавливаем окружение для composer install
+                    $env = [];
+                    if ($composerPath !== 'composer') {
+                        // Если используем полный путь, добавляем его директорию в PATH
+                        $composerDir = dirname($composerPath);
+                        $currentPath = getenv('PATH') ?: '';
+                        $env['PATH'] = $composerDir . ':' . $currentPath;
+                    }
+                    
+                    $composerInstall = Process::timeout(300)
+                        ->path(base_path())
+                        ->env($env)
+                        ->run("{$composerPath} install --no-dev --optimize-autoloader --no-interaction");
+                    
                     if ($composerInstall->successful()) {
                         $responseData['composer_install'] = 'success';
                         $this->info('Composer install выполнен успешно');
@@ -144,6 +151,7 @@ class DeployController extends Controller
                         ]);
                     }
                 }
+            }
             }
             
             // 3. Миграции
