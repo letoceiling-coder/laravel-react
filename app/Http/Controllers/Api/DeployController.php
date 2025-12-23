@@ -298,36 +298,11 @@ class DeployController extends Controller
      */
     protected function getComposerPath(): string
     {
-        // 1. Читаем напрямую из .env (надежнее чем env() в рантайме)
-        $envPath = base_path('.env');
-        if (file_exists($envPath)) {
-            $envContent = file_get_contents($envPath);
-            if (preg_match('/^COMPOSER_PATH=(.+)$/m', $envContent, $matches)) {
-                $composerPath = trim($matches[1]);
-                if ($composerPath) {
-                    // Используем путь напрямую, без проверки существования
-                    // На shared-хостинге PHP может работать от другого пользователя
-                    Log::info('[Deploy] Используется COMPOSER_PATH из .env: ' . $composerPath);
-                    return $composerPath;
-                }
-            }
-        }
-        
-        // 2. Проверяем переменную окружения через config и env
-        $composerPath = config('app.composer_path') ?: env('COMPOSER_PATH');
-        if ($composerPath) {
-            // Используем путь напрямую
-            Log::info('[Deploy] Используется COMPOSER_PATH из config/env: ' . $composerPath);
-            return $composerPath;
-        }
-        
-        // 3. Используем прямой путь для этого сервера (приоритет)
-        // Пробуем сначала скопированный composer в проекте (доступен root)
+        // 1. ПРИОРИТЕТ: Используем скопированный composer в проекте (доступен root)
+        // Это самый надежный способ для shared-хостинга
         $projectComposerPath = '/home/d/dsc23ytp/laravel/bin/composer';
-        if (file_exists($projectComposerPath) || is_readable($projectComposerPath)) {
-            Log::info('[Deploy] Используется composer из проекта: ' . $projectComposerPath);
-            return $projectComposerPath;
-        }
+        Log::info('[Deploy] Используется composer из проекта: ' . $projectComposerPath);
+        return $projectComposerPath;
         
         // Fallback: оригинальный путь
         $directPath = '/home/d/dsc23ytp/bin/composer';
