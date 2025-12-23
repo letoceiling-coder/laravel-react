@@ -268,14 +268,10 @@ class DeployController extends Controller
             if (preg_match('/^COMPOSER_PATH=(.+)$/m', $envContent, $matches)) {
                 $composerPath = trim($matches[1]);
                 if ($composerPath) {
-                    Log::debug('[Deploy] Проверка COMPOSER_PATH из .env: ' . $composerPath, [
-                        'exists' => file_exists($composerPath),
-                        'readable' => file_exists($composerPath) ? is_readable($composerPath) : false,
-                        'executable' => file_exists($composerPath) ? is_executable($composerPath) : false,
-                    ]);
-                    if (file_exists($composerPath) && is_readable($composerPath)) {
-                        return $composerPath;
-                    }
+                    // Используем путь напрямую, без проверки существования
+                    // На shared-хостинге PHP может работать от другого пользователя
+                    Log::info('[Deploy] Используется COMPOSER_PATH из .env: ' . $composerPath);
+                    return $composerPath;
                 }
             }
         }
@@ -283,37 +279,17 @@ class DeployController extends Controller
         // 2. Проверяем переменную окружения через config и env
         $composerPath = config('app.composer_path') ?: env('COMPOSER_PATH');
         if ($composerPath) {
-            Log::debug('[Deploy] Проверка COMPOSER_PATH из config/env: ' . $composerPath, [
-                'exists' => file_exists($composerPath),
-                'readable' => file_exists($composerPath) ? is_readable($composerPath) : false,
-            ]);
-            if (file_exists($composerPath) && is_readable($composerPath)) {
-                return $composerPath;
-            }
+            // Используем путь напрямую
+            Log::info('[Deploy] Используется COMPOSER_PATH из config/env: ' . $composerPath);
+            return $composerPath;
         }
         
-        // 3. Проверяем прямой путь для этого сервера (приоритет)
-        // Это самый надежный способ для shared-хостинга
-        // Используем shell для проверки, так как PHP может работать от другого пользователя
+        // 3. Используем прямой путь для этого сервера (приоритет)
+        // На shared-хостинге PHP работает от другого пользователя (root),
+        // поэтому file_exists() может не работать, но путь все равно правильный
         $directPath = '/home/d/dsc23ytp/bin/composer';
-        
-        // Проверяем через shell, так как file_exists() может не работать из-за разных пользователей
-        $testProcess = Process::run("test -f {$directPath} && test -x {$directPath} && echo 'exists'");
-        if ($testProcess->successful() && trim($testProcess->output()) === 'exists') {
-            Log::info('[Deploy] Composer найден по прямому пути (через shell): ' . $directPath);
-            return $directPath;
-        }
-        
-        // Fallback: проверяем через file_exists (может не работать на shared-хостинге)
-        if (file_exists($directPath)) {
-            Log::info('[Deploy] Composer найден по прямому пути: ' . $directPath);
-            return $directPath;
-        }
-        
-        Log::debug('[Deploy] Прямой путь не найден: ' . $directPath, [
-            'shell_check' => $testProcess->successful() ? 'failed' : 'error',
-            'php_check' => file_exists($directPath),
-        ]);
+        Log::info('[Deploy] Используется прямой путь для сервера: ' . $directPath);
+        return $directPath;
         
         // 4. Проверяем пользовательский путь ~/bin/composer (для shared-хостинга)
         $homeDir = getenv('HOME') ?: (getenv('USERPROFILE') ?: '/home/d/dsc23ytp');
