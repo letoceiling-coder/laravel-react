@@ -101,55 +101,49 @@ class DeployController extends Controller
             // Выводим информацию о используемом composer
             $this->info("Используется composer: {$composerPath}");
             
-            // Проверяем существование файла если это полный путь
-            if ($composerPath !== 'composer' && !file_exists($composerPath)) {
-                $errorMsg = "Composer не найден по пути: {$composerPath}";
+            // На shared-хостинге PHP работает от root, а composer в домашней директории пользователя
+            // Используем su для переключения на пользователя dsc23ytp
+            $user = 'dsc23ytp';
+            $composerCommand = "cd " . escapeshellarg(base_path()) . " && {$composerPath} install --no-dev --optimize-autoloader --no-interaction";
+            $fullCommand = "su - {$user} -c " . escapeshellarg($composerCommand);
+            
+            // Проверяем доступность composer перед использованием
+            $checkCommand = "su - {$user} -c " . escapeshellarg("{$composerPath} --version");
+            $checkComposer = Process::run($checkCommand);
+            
+            if (!$checkComposer->successful()) {
+                $errorMsg = "Composer недоступен по пути: {$composerPath}";
                 $responseData['composer_install'] = 'error: ' . $errorMsg;
                 $this->error($errorMsg);
                 $this->warn('Проверьте путь к composer в переменной COMPOSER_PATH в .env');
-                Log::error('[Deploy] Composer не найден', ['path' => $composerPath]);
+                Log::error('[Deploy] Composer недоступен', [
+                    'path' => $composerPath,
+                    'error' => $checkComposer->errorOutput(),
+                    'output' => $checkComposer->output(),
+                ]);
             } else {
-                // Проверяем доступность composer перед использованием
-                $checkComposer = Process::run("{$composerPath} --version");
-                if (!$checkComposer->successful()) {
-                    $errorMsg = "Composer недоступен по пути: {$composerPath}";
-                    $responseData['composer_install'] = 'error: ' . $errorMsg;
-                    $this->error($errorMsg);
-                    $this->warn('Проверьте путь к composer в переменной COMPOSER_PATH в .env');
-                    Log::error('[Deploy] Composer недоступен', [
-                        'path' => $composerPath,
-                        'error' => $checkComposer->errorOutput(),
-                    ]);
+                $composerVersion = trim($checkComposer->output());
+                $this->info("Версия composer: {$composerVersion}");
+                
+                // Выполняем composer install от имени пользователя dsc23ytp
+                $composerInstall = Process::timeout(300)
+                    ->path(base_path())
+                    ->run($fullCommand);
+                
+                if ($composerInstall->successful()) {
+                    $responseData['composer_install'] = 'success';
+                    $this->info('Composer install выполнен успешно');
                 } else {
-                    $composerVersion = trim($checkComposer->output());
-                    $this->info("Версия composer: {$composerVersion}");
-                    
-                    // Подготавливаем окружение для composer install
-                    $env = [];
-                    if ($composerPath !== 'composer') {
-                        // Если используем полный путь, добавляем его директорию в PATH
-                        $composerDir = dirname($composerPath);
-                        $currentPath = getenv('PATH') ?: '';
-                        $env['PATH'] = $composerDir . ':' . $currentPath;
-                    }
-                    
-                    $composerInstall = Process::timeout(300)
-                        ->path(base_path())
-                        ->env($env)
-                        ->run("{$composerPath} install --no-dev --optimize-autoloader --no-interaction");
-                    
-                    if ($composerInstall->successful()) {
-                        $responseData['composer_install'] = 'success';
-                        $this->info('Composer install выполнен успешно');
-                    } else {
-                        $errorOutput = $composerInstall->errorOutput();
-                        $responseData['composer_install'] = 'error: ' . $errorOutput;
-                        $this->error('Ошибка composer install: ' . $errorOutput);
-                        Log::error('[Deploy] Ошибка composer install', [
-                            'path' => $composerPath,
-                            'error' => $errorOutput,
-                        ]);
-                    }
+                    $errorOutput = $composerInstall->errorOutput();
+                    $stdOutput = $composerInstall->output();
+                    $responseData['composer_install'] = 'error: ' . ($errorOutput ?: $stdOutput);
+                    $this->error('Ошибка composer install: ' . ($errorOutput ?: $stdOutput));
+                    Log::error('[Deploy] Ошибка composer install', [
+                        'path' => $composerPath,
+                        'error' => $errorOutput,
+                        'output' => $stdOutput,
+                        'command' => $fullCommand,
+                    ]);
                 }
             }
             
